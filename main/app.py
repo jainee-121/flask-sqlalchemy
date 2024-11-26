@@ -1,11 +1,10 @@
-from flask import Flask, jsonify, session, request, redirect, url_for, Blueprint,g
+from flask import Flask, current_app, jsonify, session, request, redirect, url_for, Blueprint,g,abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_security import UserMixin, RoleMixin
-from flask_login import LoginManager,login_user,logout_user,current_user
+from flask_login import LoginManager, login_required,login_user,logout_user,current_user
 from werkzeug.security import check_password_hash, generate_password_hash
 import uuid
 from flask_migrate import Migrate
-from flask_security import roles_accepted
 
 # Database Initialization
 db = SQLAlchemy()
@@ -80,9 +79,9 @@ def login():
         if not user or not check_password_hash(user.password, password):
             return jsonify({"message": "Incorrect email or password"}), 401
         
-        # Login the user
         login_user(user)
-        
+        print(current_user.email)
+
         return jsonify({
             'message': 'Login Success', 
         }), 200
@@ -112,37 +111,140 @@ def register():
         db.session.add(user)
         db.session.commit()
         return jsonify({"message":" registered successfully!"}),201
-    return jsonify({"message":" registration end-point is available, sent POST request"})
+    if request.method=="GET":
+        users=User.query.all()
+        return jsonify({"message":[user.email for user in users ]})
+    
+@user_bp.route("/update/<int:user_id>", methods=["PUT"])
+@login_required
+def update_user(user_id):
+    """
+    Updates the user data based on the provided user ID.
+    Allows updating email, password, and roles.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No data provided"}), 400
+
+    # Fetch the user from the database
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    # Update email if provided
+    new_email = data.get("email")
+    if new_email:
+        if User.query.filter_by(email=new_email).first() and user.email != new_email:
+            return jsonify({"message": "Email already in use"}), 400
+        user.email = new_email
+
+    # Update password if provided
+    new_password = data.get("password")
+    if new_password:
+        user.password = generate_password_hash(new_password)
+
+    # Update roles if provided
+    new_roles = data.get("role")
+    if new_roles:
+        user_roles_list = []
+        for role_name in new_roles:
+            role = Role.query.filter_by(name=role_name).first()
+            if not role:
+                return jsonify({"message": f"Invalid role: {role_name}"}), 400
+            user_roles_list.append(role)
+        user.role = user_roles_list  # Update the roles relationship
+
+    # Commit changes to the database
+    try:
+        db.session.commit()
+        return jsonify({"message": "User updated successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error updating user: {str(e)}"}), 500
+
 
 @user_bp.route("/logout", methods=["GET"])
+@login_required
 def logout():
+    if current_user.is_authenticated:
+        print(f"Logged in user after logout: {current_user.email}")
+    else:
+        print("No user is currently logged in after logout.")
+
+    print(f"Logged in user: {current_user.email}")  # This will log the email of the logged-in user
     logout_user()
-    return jsonify({"message": "User logged out successfully"}), 200
+    return jsonify({"message": "User logged out successfully "}), 200
+
+@user_bp.route("/delete/<int:user_id>", methods=["DELETE"])
+@login_required
+def delete_user(user_id):
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({"message": "User deleted successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error deleting user: {str(e)}"}), 500
 
 @role_bp.route("/admin")
-@roles_accepted("Admin")
+@login_required
 def admin_dashboard():
-    teachers = []
-    admin = []
-    staffs = []
-    students = []
-    
+    print(current_user.email)
+    if current_user.is_authenticated:
+        if "Admin" not in [role.name for role in current_user.role]:
+            return jsonify({"message": "You do not have permission to access this page"}), 403
     # Query for role-specific users
+    user_email_dict = {}  # Initialize an empty dictionary to hold role_id as the key and a list of emails as values
+    role=Role.query.all()
+    for roles in role:
+        user_email_dict[roles.name] = []
     for user_role in db.session.query(user_roles):
-        user = User.query.get(user_role.user_id)
-        if user_role.role_id == 1:
-            admin.append(user)
-        elif user_role.role_id == 2:
-            teachers.append(user)
-        elif user_role.role_id == 3:
-            staffs.append(user)
-        elif user_role.role_id == 4:
-            students.append(user)
-    
-    return jsonify({
-        "Admin": [user.email for user in admin],
-        "Teacher": [user.email for user in teachers],
-        "Staff": [user.email for user in staffs],
-        "Student": [user.email for user in students],
-    }), 200
+        user = User.query.get(user_role.user_id)  
+        role = Role.query.get(user_role.role_id)  
+        if user:  
+                user_email_dict[role.name].append(user.email)
+        print(user_email_dict)
+    return jsonify({'message':user_email_dict})
 
+# debugging 
+@user_bp.before_request
+@role_bp.before_request
+def log_request_info():
+    print(f"Current User: {current_user}")
+    print(f"Is Authenticated: {current_user.is_authenticated}")
+
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        user = User.query.filter_by(fs_uniquifier=user_id).first()
+        print(f"Loading user: {user.email if user else 'No user found'}")
+        return user
+    except Exception as e:
+        print(f"Error loading user: {e}")
+        return None
+
+@role_bp.route("/role",methods=["GET","POST"])
+@login_required
+def role():
+    if request.method=="POST":
+        data=request.get_json()
+        name=data.get("role")
+        if not name:
+            return jsonify({"message":"role field is required"})
+        if name:
+            for names in name:
+                role=Role.query.filter_by(name=names).first() 
+                if not role:
+                    roles=Role(name=names)
+                    db.session.add(roles)
+                    db.session.commit()
+                    return jsonify({"message":"Role added succesfully"}),200
+                else:
+                    return jsonify({"message":"Role already exist"}),400
+    else:
+        return jsonify({"message":[role.name for role in Role.query.all()]})
