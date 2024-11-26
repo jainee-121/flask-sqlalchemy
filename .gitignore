@@ -1,4 +1,4 @@
 .pyc
-migrations/
+flask_sqlalchemy/migrations/
 secret.py
 env/
