@@ -7,7 +7,7 @@ import uuid
 from flask_migrate import Migrate
 
 # Database Initialization
-db = SQLAlchemy()
+db = SQLAlchemy() 
 login_manager=LoginManager()
 migrate=Migrate()
 user_bp = Blueprint('user', __name__,url_prefix="/auth")
@@ -127,7 +127,7 @@ def update_user(user_id):
         return jsonify({"message": "No data provided"}), 400
 
     # Fetch the user from the database
-    user = User.query.get(user_id)
+    user = User.query.get(user_id)                 
     if not user:
         return jsonify({"message": "User not found"}), 404
 
@@ -170,8 +170,6 @@ def logout():
         print(f"Logged in user after logout: {current_user.email}")
     else:
         print("No user is currently logged in after logout.")
-
-    print(f"Logged in user: {current_user.email}")  # This will log the email of the logged-in user
     logout_user()
     return jsonify({"message": "User logged out successfully "}), 200
 
@@ -198,18 +196,18 @@ def admin_dashboard():
     if current_user.is_authenticated:
         if "Admin" not in [role.name for role in current_user.role]:
             return jsonify({"message": "You do not have permission to access this page"}), 403
-    # Query for role-specific users
-    user_email_dict = {}  # Initialize an empty dictionary to hold role_id as the key and a list of emails as values
-    role=Role.query.all()
-    for roles in role:
-        user_email_dict[roles.name] = []
-    for user_role in db.session.query(user_roles):
-        user = User.query.get(user_role.user_id)  
-        role = Role.query.get(user_role.role_id)  
-        if user:  
-                user_email_dict[role.name].append(user.email)
-        print(user_email_dict)
-    return jsonify({'message':user_email_dict})
+
+        user_email_dict = {} 
+        role=Role.query.all()
+        for roles in role:
+            user_email_dict[roles.name] = []
+        for user_role in db.session.query(user_roles):
+            user = User.query.get(user_role.user_id)  
+            role = Role.query.get(user_role.role_id)  
+            if user:  
+                    user_email_dict[role.name].append(user.email)
+            print(user_email_dict)
+        return jsonify({'message':user_email_dict})
 
 # debugging 
 @user_bp.before_request
@@ -248,3 +246,28 @@ def role():
                     return jsonify({"message":"Role already exist"}),400
     else:
         return jsonify({"message":[role.name for role in Role.query.all()]})
+
+@role_bp.route("/assign/<int:id>",methods=["POST"])
+@login_required
+def assign(id):
+    if current_user.is_authenticated:
+        user=User.query.get(id)
+        if user:
+            if "Admin" not in user.role:
+                return jsonify({"message":"you dont have permission"}),401
+            else:
+                    data=request.get_json()
+                    role=data.get('role')
+                    list=[]
+                    for roles in role:
+                        print(roles)
+                        old_role=Role.query.filter_by(name=roles).first()
+                        print(old_role)
+                        if old_role:
+                            list.append(old_role)
+                    user.role=list
+                    db.session.commit()
+                    return jsonify({"message":"role assigned successfully"})
+        return jsonify({"message":"user not in the database"})    
+    return jsonify({"message":"User unauthenticated"}),401
+    
